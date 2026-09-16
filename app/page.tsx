@@ -1,6 +1,7 @@
 'use client';
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {Home,Search,Library,Heart,Plus,ChevronLeft,ChevronRight,Play,Pause,SkipBack,SkipForward,Shuffle,Repeat2,Volume2,MoreHorizontal,Music2,Disc3,UserRound} from 'lucide-react';
+import {decodeMp4} from '@audio/decode-mp4';
 
 type Song={id:number,title:string,artist:string,album:string,quality:string,cover:string,duration:string,stream:string};
 const songs:Song[]=[
@@ -46,10 +47,6 @@ export default function Page(){
       const response=await fetch('/api/track?format=m4a',{cache:'no-store'});
       if(!response.ok)throw new Error(await response.text());
       const bytes=new Uint8Array(await response.arrayBuffer());
-      // Import the decoder only in the browser. This keeps the Next.js server
-      // build from evaluating browser/WebAssembly code during prerendering.
-      const decoderModule=await import('@audio/decode-mp4');
-      const decodeMp4=decoderModule.default;
       const decoded=await decodeMp4(bytes);
       const ctx=audioContextRef.current??new AudioContext();
       audioContextRef.current=ctx;
@@ -57,11 +54,7 @@ export default function Page(){
       const frameCount=decoded.channelData[0]?.length??0;
       if(!channels||!frameCount)throw new Error('ALAC decoder returned no audio samples');
       const buffer=ctx.createBuffer(channels,frameCount,decoded.sampleRate);
-      decoded.channelData.forEach((channel,index)=>{
-        // Avoid a TypeScript ArrayBufferLike vs ArrayBuffer mismatch by copying
-        // through the AudioBuffer's own Float32Array view.
-        buffer.getChannelData(index).set(channel);
-      });
+      decoded.channelData.forEach((channel,index)=>buffer.getChannelData(index).set(channel));
       alacBufferRef.current=buffer;
       setDuration(buffer.duration);
       return buffer;
@@ -103,7 +96,7 @@ export default function Page(){
     const a=audioRef.current;if(!a)return;
     const onTime=()=>{if(current.id===1)setPosition(a.currentTime)};
     const onMeta=()=>{if(current.id===1)setDuration(a.duration||0)};
-    const onError=()=>setStreamError('MEGA stream could not be loaded. Check the MEGA file.');
+    const onError=()=>{if(current.id===1)setStreamError('MEGA stream could not be loaded. Check the MEGA file.')};
     a.addEventListener('timeupdate',onTime);a.addEventListener('loadedmetadata',onMeta);a.addEventListener('error',onError);
     return()=>{a.removeEventListener('timeupdate',onTime);a.removeEventListener('loadedmetadata',onMeta);a.removeEventListener('error',onError)}
   },[current.id]);
@@ -115,10 +108,15 @@ export default function Page(){
     alacOffsetRef.current=0;
     setPosition(0);setDuration(0);setStreamError('');setLoading(false);
     a.pause();
-    a.src=current.stream;
-    a.load();
-    if(current.id===1&&playing)a.play().catch(()=>setPlaying(false));
-    if(current.id===2&&playing)playAlac();
+    if(current.id===1){
+      a.src=current.stream;
+      a.load();
+      if(playing)a.play().catch(()=>setPlaying(false));
+    }else{
+      a.removeAttribute('src');
+      a.load();
+      if(playing)playAlac();
+    }
     return()=>stopAlac();
   },[current]);
 
