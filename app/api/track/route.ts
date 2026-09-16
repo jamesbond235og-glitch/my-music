@@ -4,7 +4,7 @@ import { NextRequest } from 'next/server';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const MEGA_FOLDER_URL = 'https://mega.nz/folder/J6ZzRYoa#kQ2tDf5tNP8NMrrGm_EXow';
+const MEGA_FOLDER_URL = 'https://mega.nz/#F!J6ZzRYoa!kQ2tDf5tNP8NMrrGm_EXow';
 const MP3_URL = process.env.MEGA_TEST_URL;
 const LEGACY_M4A_URL = 'https://mega.nz/file/Jz4SAZIK#7cJMxdT44BN9QIh6ea_neDwqvs5ztaj2OepUe0tqfjw';
 
@@ -29,7 +29,6 @@ export async function GET(request: NextRequest) {
   const legacyFormat = request.nextUrl.searchParams.get('format');
 
   if (!fileId && urlParam) {
-    // Backward-compatible support for the previous direct-file URL format.
     try {
       const file = MEGAFile.fromURL(urlParam);
       await file.loadAttributes();
@@ -43,7 +42,6 @@ export async function GET(request: NextRequest) {
   if (!fileId) {
     const sourceUrl = legacyFormat === 'm4a' ? LEGACY_M4A_URL : MP3_URL;
     if (!sourceUrl) return new Response('MEGA song URL is not configured', { status: 400 });
-
     try {
       const file = MEGAFile.fromURL(sourceUrl);
       await file.loadAttributes();
@@ -55,9 +53,8 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // MEGAJS documents that a shared-folder file can be addressed through
-    // the folder URL + /file/<nodeId>. loadAttributes() then returns the
-    // selected file object with its correct decryption key.
+    // A shared-folder link can point to a specific file by appending /file/<nodeId>.
+    // Using the legacy folder URL avoids an EARGS issue in the megajs version used here.
     const selected = MEGAFile.fromURL(`${MEGA_FOLDER_URL}/file/${encodeURIComponent(fileId)}`);
     const file = await selected.loadAttributes();
     return streamFile(file, request);
