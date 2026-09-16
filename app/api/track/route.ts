@@ -6,6 +6,29 @@ export const dynamic = 'force-dynamic';
 
 const MEGA_URL = process.env.MEGA_TEST_URL;
 
+function getAudioContentType(fileName: string): string {
+  const extension = fileName.toLowerCase().split('.').pop();
+
+  switch (extension) {
+    case 'mp3':
+      return 'audio/mpeg';
+    case 'm4a':
+    case 'm4b':
+    case 'mp4':
+      return 'audio/mp4';
+    case 'aac':
+      return 'audio/aac';
+    case 'wav':
+      return 'audio/wav';
+    case 'ogg':
+      return 'audio/ogg';
+    case 'flac':
+      return 'audio/flac';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
 export async function GET(request: NextRequest) {
   if (!MEGA_URL) {
     return new Response('MEGA_TEST_URL is not configured', { status: 500 });
@@ -19,6 +42,9 @@ export async function GET(request: NextRequest) {
     if (!size) {
       return new Response('MEGA file has no readable size', { status: 502 });
     }
+
+    const fileName = String(file.name || 'track.m4a');
+    const contentType = getAudioContentType(fileName);
 
     const range = request.headers.get('range');
     let start = 0;
@@ -42,8 +68,6 @@ export async function GET(request: NextRequest) {
 
     const length = end - start + 1;
 
-    // Vercel runs this route on Node. Force HTTPS for MEGA's download URL
-    // and use one connection for the most reliable server-side streaming.
     const megaStream = file.download({
       start,
       end,
@@ -65,7 +89,7 @@ export async function GET(request: NextRequest) {
     });
 
     const headers = new Headers({
-      'Content-Type': 'audio/mp4',
+      'Content-Type': contentType,
       'Accept-Ranges': 'bytes',
       'Content-Length': String(length),
       'Cache-Control': 'private, no-store',
