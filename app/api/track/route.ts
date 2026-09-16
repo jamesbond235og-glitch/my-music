@@ -4,7 +4,8 @@ import { NextRequest } from 'next/server';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const MEGA_FOLDER_URL = 'https://mega.nz/folder/J6ZzRYoa#kQ2tDf5tNP8NMrrGm_EXow';
+const MP3_URL = process.env.MEGA_TEST_URL;
+const LEGACY_M4A_URL = 'https://mega.nz/file/Jz4SAZIK#7cJMxdT44BN9QIh6ea_neDwqvs5ztaj2OepUe0tqfjw';
 
 function getAudioContentType(fileName: string): string {
   const extension = fileName.toLowerCase().split('.').pop();
@@ -21,45 +22,16 @@ function getAudioContentType(fileName: string): string {
   }
 }
 
-async function getSongFile(path: string) {
-  if (!path) throw new Error('Missing song path');
-
-  const root = MEGAFile.fromURL(MEGA_FOLDER_URL);
-  await root.loadAttributes();
-
-  let current: any = root;
-  const parts = path.split('/').filter(Boolean);
-
-  for (const part of parts) {
-    const children = Array.isArray(current.children) ? current.children : [];
-    const next = children.find((child: any) => String(child.name || '') === part);
-    if (!next) throw new Error(`Song path not found: ${path}`);
-    current = next;
-  }
-
-  if (current.directory) throw new Error('The requested path is a folder, not a song');
-  await current.loadAttributes();
-  return current;
-}
-
 export async function GET(request: NextRequest) {
-  const path = request.nextUrl.searchParams.get('path') || '';
+  const urlParam = request.nextUrl.searchParams.get('url');
   const legacyFormat = request.nextUrl.searchParams.get('format');
 
-  try {
-    let file: any;
+  const sourceUrl = urlParam || (legacyFormat === 'm4a' ? LEGACY_M4A_URL : MP3_URL);
+  if (!sourceUrl) return new Response('MEGA song URL is not configured', { status: 400 });
 
-    if (!path && legacyFormat === 'm4a') {
-      file = MEGAFile.fromURL('https://mega.nz/file/Jz4SAZIK#7cJMxdT44BN9QIh6ea_neDwqvs5ztaj2OepUe0tqfjw');
-      await file.loadAttributes();
-    } else if (!path && legacyFormat !== 'm4a') {
-      const url = process.env.MEGA_TEST_URL;
-      if (!url) return new Response('Missing MEGA song path', { status: 400 });
-      file = MEGAFile.fromURL(url);
-      await file.loadAttributes();
-    } else {
-      file = await getSongFile(path);
-    }
+  try {
+    const file = MEGAFile.fromURL(sourceUrl);
+    await file.loadAttributes();
 
     const size = Number(file.size || 0);
     if (!size) return new Response('MEGA file has no readable size', { status: 502 });
