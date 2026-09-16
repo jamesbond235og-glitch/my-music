@@ -4,7 +4,7 @@ import { NextRequest } from 'next/server';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const MEGA_FOLDER_URL = 'https://mega.nz/#F!J6ZzRYoa!kQ2tDf5tNP8NMrrGm_EXow';
+const MEGA_FOLDER_URL = 'https://mega.nz/folder/J6ZzRYoa#kQ2tDf5tNP8NMrrGm_EXow';
 const MP3_URL = process.env.MEGA_TEST_URL;
 const LEGACY_M4A_URL = 'https://mega.nz/file/Jz4SAZIK#7cJMxdT44BN9QIh6ea_neDwqvs5ztaj2OepUe0tqfjw';
 
@@ -23,43 +23,47 @@ function getAudioContentType(fileName: string): string {
   }
 }
 
+async function findSong(path: string) {
+  const parts = path.split('/').filter(Boolean);
+  if (!parts.length) throw new Error('Missing song path');
+
+  const root = MEGAFile.fromURL(MEGA_FOLDER_URL);
+  await root.loadAttributes();
+
+  let current: any = root;
+  for (const part of parts) {
+    const children = Array.isArray(current?.children) ? current.children : [];
+    const next = children.find((child: any) => String(child?.name || '') === part);
+    if (!next) throw new Error(`Song not found: ${path}`);
+    current = next;
+  }
+
+  if (current?.directory) throw new Error('Selected path is a folder');
+  return current;
+}
+
 export async function GET(request: NextRequest) {
-  const fileId = request.nextUrl.searchParams.get('id');
+  const path = request.nextUrl.searchParams.get('path');
   const urlParam = request.nextUrl.searchParams.get('url');
   const legacyFormat = request.nextUrl.searchParams.get('format');
 
-  if (!fileId && urlParam) {
-    try {
-      const file = MEGAFile.fromURL(urlParam);
-      await file.loadAttributes();
-      return streamFile(file, request);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return new Response(`Unable to stream the MEGA file: ${message}`, { status: 502 });
-    }
-  }
-
-  if (!fileId) {
-    const sourceUrl = legacyFormat === 'm4a' ? LEGACY_M4A_URL : MP3_URL;
-    if (!sourceUrl) return new Response('MEGA song URL is not configured', { status: 400 });
-    try {
-      const file = MEGAFile.fromURL(sourceUrl);
-      await file.loadAttributes();
-      return streamFile(file, request);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return new Response(`Unable to stream the MEGA file: ${message}`, { status: 502 });
-    }
-  }
-
   try {
-    // A shared-folder link can point to a specific file by appending /file/<nodeId>.
-    // Using the legacy folder URL avoids an EARGS issue in the megajs version used here.
-    const selected = MEGAFile.fromURL(`${MEGA_FOLDER_URL}/file/${encodeURIComponent(fileId)}`);
-    const file = await selected.loadAttributes();
+    let file: any;
+
+    if (path) {
+      // Shared-folder children are real File objects and can be downloaded
+      // directly, without rebuilding a fragile /file/<nodeId> URL.
+      file = await findSong(path);
+    } else {
+      const sourceUrl = urlParam || (legacyFormat === 'm4a' ? LEGACY_M4A_URL : MP3_URL);
+      if (!sourceUrl) return new Response('MEGA song URL is not configured', { status: 400 });
+      file = MEGAFile.fromURL(sourceUrl);
+      await file.loadAttributes();
+    }
+
     return streamFile(file, request);
   } catch (error) {
-    console.error('MEGA folder file streaming error:', error);
+    console.error('MEGA song streaming error:', error);
     const message = error instanceof Error ? error.message : String(error);
     return new Response(`Unable to stream the MEGA file: ${message}`, { status: 502 });
   }
@@ -81,16 +85,16 @@ async function streamFile(file: any, request: NextRequest): Promise<Response> {
 
     const startText = match[1];
     const endText = match[2];
-    if (startText === '' && endText === '') return new Response('Invalid Range', { status: 416 });
+    if (!startText && !endText) return new Response('Invalid Range', { status: 416 });
 
-    if (startText === '') {
+    if (!startText) {
       const suffixLength = Number(endText);
       if (!Number.isFinite(suffixLength) || suffixLength <= 0) return new Response('Invalid Range', { status: 416 });
       start = Math.max(0, size - suffixLength);
       end = size - 1;
     } else {
       start = Number(startText);
-      end = endText === '' ? size - 1 : Number(endText);
+      end = endText ? Number(endText) : size - 1;
     }
 
     if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < 0 || start >= size || end >= size || start > end) {
