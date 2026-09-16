@@ -10,7 +10,7 @@ const COVER_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif']);
 
 type LibrarySong = {
   id: number; title: string; artist: string; album: string; quality: string;
-  fileName: string; path: string; fileId: string; format: string; duration: string; stream: string;
+  fileName: string; path: string; fileId: string; format: string; duration: string; stream: string; cover?: string;
 };
 type Album = { name: string; path: string; songs: LibrarySong[]; cover?: string };
 type Artist = { name: string; songs: LibrarySong[] };
@@ -26,11 +26,6 @@ function getQuality(fileName: string): string {
   const format = getFormat(fileName).toUpperCase();
   return format === 'M4A' ? 'M4A • Original file' : `${format} • Original file`;
 }
-function isCoverName(fileName: string): boolean {
-  const match = fileName.toLowerCase().match(/^cover\.([a-z0-9]+)$/);
-  return !!match && COVER_EXTENSIONS.has(match[1]);
-}
-
 async function readRange(file: any, start: number, length: number): Promise<Buffer> {
   if (length <= 0) return Buffer.alloc(0);
   const end = Math.min(Number(file.size || 0) - 1, start + length - 1);
@@ -44,7 +39,6 @@ async function readRange(file: any, start: number, length: number): Promise<Buff
   });
   return Buffer.concat(chunks);
 }
-
 async function getMetadata(file: any, fileName: string) {
   const extension = getFormat(fileName);
   const size = Number(file?.size || 0);
@@ -56,88 +50,66 @@ async function getMetadata(file: any, fileName: string) {
     return null;
   }
 }
-
-async function walkFolder(folder: any, pathParts: string[], songs: Omit<LibrarySong, 'id'>[], covers: Map<string, string>) {
+function getCoverFile(children: any[]): any | null {
+  for (const child of children) {
+    if (child?.directory) continue;
+    const name = String(child?.name || '');
+    const match = name.match(/^cover\.(jpg|jpeg|png|webp|gif)$/i);
+    if (match && COVER_EXTENSIONS.has(match[1].toLowerCase())) return child;
+  }
+  return null;
+}
+async function walkFolder(folder: any, pathParts: string[], songs: Omit<LibrarySong, 'id'>[]) {
   const children = Array.isArray(folder?.children) ? folder.children : [];
+  const coverFile = getCoverFile(children);
+  const coverId = String(coverFile?.nodeId || coverFile?.downloadId || '');
+  const albumCover = coverId ? `/api/cover?id=${encodeURIComponent(coverId)}` : undefined;
   for (const child of children) {
     const name = String(child?.name || '');
     if (!name) continue;
     const nextPath = [...pathParts, name];
-
     if (child?.directory || Array.isArray(child?.children)) {
-      await walkFolder(child, nextPath, songs, covers);
+      await walkFolder(child, nextPath, songs);
       continue;
     }
-
-    if (pathParts.length > 0 && isCoverName(name)) {
-      const albumFolder = pathParts[0];
-      const coverId = String(child?.nodeId || child?.downloadId || '');
-      if (coverId && !covers.has(albumFolder)) {
-        covers.set(albumFolder, `/api/cover?id=${encodeURIComponent(coverId)}`);
-      }
-      continue;
-    }
-
     const extension = name.toLowerCase().split('.').pop() || '';
     if (!AUDIO_EXTENSIONS.has(extension)) continue;
     const fileId = String(child?.nodeId || child?.downloadId || '');
     if (!fileId) continue;
-
     const metadata = await getMetadata(child, name);
+    const title = String(metadata?.title || getTitle(name));
+    const artist = String(metadata?.artist || 'Unknown Artist');
+    const album = String(metadata?.album || pathParts[0] || 'Singles');
     songs.push({
-      title: String(metadata?.title || getTitle(name)),
-      artist: String(metadata?.artist || 'Unknown Artist'),
-      album: String(pathParts[0] || 'Singles'),
-      quality: getQuality(name),
-      fileName: name,
-      path: nextPath.join('/'),
-      fileId,
-      format: getFormat(name),
-      duration: '--:--',
-      stream: `/api/track?id=${encodeURIComponent(fileId)}`,
+      title, artist, album, quality: getQuality(name), fileName: name,
+      path: nextPath.join('/'), fileId, format: getFormat(name), duration: '--:--',
+      stream: `/api/track?id=${encodeURIComponent(fileId)}`, cover: albumCover,
     });
   }
 }
-
 export async function GET() {
   try {
     const root = MEGAFile.fromURL(MEGA_FOLDER_URL);
     await root.loadAttributes();
-
     const found: Omit<LibrarySong, 'id'>[] = [];
-    const covers = new Map<string, string>();
-    await walkFolder(root, [], found, covers);
-
-    const sorted = found
-      .sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }))
-      .map((song, index) => ({ ...song, id: index + 1 }));
-
+    await walkFolder(root, [], found);
+    const sorted = found.sort((a,b)=>a.path.localeCompare(b.path,undefined,{numeric:true,sensitivity:'base'})).map((song,index)=>({...song,id:index+1}));
     const albums = new Map<string, Album>();
     const singles: LibrarySong[] = [];
     const artists = new Map<string, Artist>();
-
     for (const song of sorted) {
       const firstFolder = song.path.includes('/') ? song.path.split('/')[0] : null;
       if (!firstFolder) singles.push(song);
       else {
         const existing = albums.get(firstFolder);
-        if (existing) existing.songs.push(song);
-        else albums.set(firstFolder, { name: firstFolder, path: firstFolder, songs: [song], cover: covers.get(firstFolder) });
+        if (existing) { existing.songs.push(song); if (!existing.cover && song.cover) existing.cover = song.cover; }
+        else albums.set(firstFolder,{name:firstFolder,path:firstFolder,songs:[song],cover:song.cover});
       }
-
       const artistKey = song.artist.trim() || 'Unknown Artist';
       const artist = artists.get(artistKey);
-      if (artist) artist.songs.push(song);
-      else artists.set(artistKey, { name: artistKey, songs: [song] });
+      if (artist) artist.songs.push(song); else artists.set(artistKey,{name:artistKey,songs:[song]});
     }
-
-    return Response.json({
-      folder: root?.name || 'My Music',
-      albums: Array.from(albums.values()),
-      artists: Array.from(artists.values()).sort((a, b) => a.name.localeCompare(b.name)),
-      singles,
-      songs: sorted,
-    }, { headers: { 'Cache-Control': 'no-store' } });
+    return Response.json({folder:root?.name||'My Music',albums:Array.from(albums.values()),artists:Array.from(artists.values()).sort((a,b)=>a.name.localeCompare(b.name)),singles,songs:sorted},{headers:{'Cache-Control':'no-store'}});
   } catch (error) {
     console.error('MEGA library scan error:', error);
     const message = error instanceof Error ? error.message : String(error);
