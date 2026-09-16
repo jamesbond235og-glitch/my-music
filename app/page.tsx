@@ -1,6 +1,5 @@
 'use client';
 import {useEffect,useMemo,useRef,useState} from 'react';
-import decodeMp4 from '@audio/decode-mp4';
 import {Home,Search,Library,Heart,Plus,ChevronLeft,ChevronRight,Play,Pause,SkipBack,SkipForward,Shuffle,Repeat2,Volume2,MoreHorizontal,Music2,Disc3,UserRound} from 'lucide-react';
 
 type Song={id:number,title:string,artist:string,album:string,quality:string,cover:string,duration:string,stream:string};
@@ -33,7 +32,9 @@ export default function Page(){
     if(source){try{source.stop();}catch{}}
     alacSourceRef.current=null;
     const ctx=audioContextRef.current;
-    if(ctx) alacOffsetRef.current=Math.min(Math.max(0,ctx.currentTime-alacStartedAtRef.current+alacOffsetRef.current),alacBufferRef.current?.duration??0);
+    if(ctx&&alacBufferRef.current){
+      alacOffsetRef.current=Math.min(Math.max(0,ctx.currentTime-alacStartedAtRef.current+alacOffsetRef.current),alacBufferRef.current.duration);
+    }
   };
 
   const loadAlac=async()=>{
@@ -42,13 +43,20 @@ export default function Page(){
     setLoading(true);
     setStreamError('');
     try{
-      const response=await fetch('/api/track?format=m4a');
-      if(!response.ok) throw new Error(await response.text());
+      const response=await fetch('/api/track?format=m4a',{cache:'no-store'});
+      if(!response.ok)throw new Error(await response.text());
       const bytes=new Uint8Array(await response.arrayBuffer());
+      // Import the decoder only in the browser. This keeps the Next.js server
+      // build from evaluating browser/WebAssembly code during prerendering.
+      const decoderModule=await import('@audio/decode-mp4');
+      const decodeMp4=decoderModule.default;
       const decoded=await decodeMp4(bytes);
       const ctx=audioContextRef.current??new AudioContext();
       audioContextRef.current=ctx;
-      const buffer=ctx.createBuffer(decoded.channelData.length,decoded.channelData[0].length,decoded.sampleRate);
+      const channels=decoded.channelData.length;
+      const frameCount=decoded.channelData[0]?.length??0;
+      if(!channels||!frameCount)throw new Error('ALAC decoder returned no audio samples');
+      const buffer=ctx.createBuffer(channels,frameCount,decoded.sampleRate);
       decoded.channelData.forEach((channel,index)=>buffer.copyToChannel(channel,index));
       alacBufferRef.current=buffer;
       setDuration(buffer.duration);
@@ -104,8 +112,8 @@ export default function Page(){
     setPosition(0);setDuration(0);setStreamError('');setLoading(false);
     a.pause();
     a.src=current.stream;
-    if(current.id===1&&playing){a.load();a.play().catch(()=>setPlaying(false))}
-    else a.load();
+    a.load();
+    if(current.id===1&&playing)a.play().catch(()=>setPlaying(false));
     if(current.id===2&&playing)playAlac();
     return()=>stopAlac();
   },[current]);
@@ -127,12 +135,15 @@ export default function Page(){
     if(current.id===1){
       const a=audioRef.current;if(!a)return;
       if(a.paused){try{await a.play();setPlaying(true)}catch{setStreamError('MP3 playback failed.')}}
-      else {a.pause();setPlaying(false)}
+      else{a.pause();setPlaying(false)}
       return;
     }
     if(playing){
       const ctx=audioContextRef.current;
-      if(ctx&&alacSourceRef.current){alacOffsetRef.current=Math.min(ctx.currentTime-alacStartedAtRef.current+alacOffsetRef.current,alacBufferRef.current?.duration??0);stopAlac();}
+      if(ctx&&alacSourceRef.current){
+        alacOffsetRef.current=Math.min(ctx.currentTime-alacStartedAtRef.current+alacOffsetRef.current,alacBufferRef.current?.duration??0);
+        stopAlac();
+      }
       setPlaying(false);
     }else await playAlac();
   };
