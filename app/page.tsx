@@ -1,7 +1,7 @@
 'use client';
 import {useEffect,useMemo,useRef,useState} from 'react';
+import decodeMp4 from '@audio/decode-mp4';
 import {Home,Search,Library,Heart,Plus,ChevronLeft,ChevronRight,Play,Pause,SkipBack,SkipForward,Shuffle,Repeat2,Volume2,MoreHorizontal,Music2,Disc3,UserRound} from 'lucide-react';
-import {decodeMp4} from '@audio/decode-mp4';
 
 type Song={id:number,title:string,artist:string,album:string,quality:string,cover:string,duration:string,stream:string};
 const songs:Song[]=[
