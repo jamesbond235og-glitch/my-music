@@ -3,9 +3,7 @@ import { File as MEGAFile } from 'megajs';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// Use MEGA's legacy shared-folder URL format for compatibility with the
-// megajs version used by this project.
-const MEGA_FOLDER_URL = 'https://mega.nz/#F!J6ZzRYoa!kQ2tDf5tNP8NMrrGm_EXow';
+const MEGA_FOLDER_URL = 'https://mega.nz/folder/J6ZzRYoa#kQ2tDf5tNP8NMrrGm_EXow';
 const AUDIO_EXTENSIONS = new Set(['mp3', 'm4a', 'm4b', 'aac', 'wav', 'ogg', 'flac']);
 
 type LibrarySong = {
@@ -38,28 +36,29 @@ function getQuality(fileName: string): string {
   return format === 'M4A' ? 'M4A • Original file' : `${format} • Original file`;
 }
 
-async function walkFolder(folder: any, pathParts: string[], songs: Omit<LibrarySong, 'id'>[]) {
+function walkFolder(folder: any, pathParts: string[], songs: Omit<LibrarySong, 'id'>[]) {
   const children = Array.isArray(folder?.children) ? folder.children : [];
 
   for (const child of children) {
     const name = String(child?.name || '');
+    if (!name) continue;
+
     const nextPath = [...pathParts, name];
 
-    // Shared-folder children already carry their attributes/name and nodeId.
-    // Do not call loadAttributes() on each child: with this megajs version that
-    // can issue an invalid shared-folder API request (EARGS).
-    if (child?.directory) {
-      await walkFolder(child, nextPath, songs);
+    // A shared-folder directory already exposes its child nodes after the
+    // root folder has been loaded. Do not call loadAttributes() on every
+    // child: that can trigger invalid EARGS requests against the share API.
+    if (child?.directory || Array.isArray(child?.children)) {
+      walkFolder(child, nextPath, songs);
       continue;
     }
 
     const extension = name.toLowerCase().split('.').pop() || '';
     if (!AUDIO_EXTENSIONS.has(extension)) continue;
 
-    const fileId = String(child?.nodeId || '');
+    const fileId = String(child?.nodeId || child?.downloadId || '');
     if (!fileId) continue;
 
-    const format = getFormat(name);
     songs.push({
       title: getTitle(name),
       artist: 'Unknown Artist',
@@ -68,7 +67,7 @@ async function walkFolder(folder: any, pathParts: string[], songs: Omit<LibraryS
       fileName: name,
       path: nextPath.join('/'),
       fileId,
-      format,
+      format: getFormat(name),
       duration: '--:--',
       stream: `/api/track?id=${encodeURIComponent(fileId)}`,
     });
@@ -77,10 +76,13 @@ async function walkFolder(folder: any, pathParts: string[], songs: Omit<LibraryS
 
 export async function GET() {
   try {
-    const rootLink = MEGAFile.fromURL(MEGA_FOLDER_URL);
-    const root = await rootLink.loadAttributes();
+    // Load the modern shared-folder URL. MEGAJS populates .children on the
+    // folder object; the promise return value is not needed for folder scans.
+    const root = MEGAFile.fromURL(MEGA_FOLDER_URL);
+    await root.loadAttributes();
+
     const found: Omit<LibrarySong, 'id'>[] = [];
-    await walkFolder(root, [], found);
+    walkFolder(root, [], found);
 
     const sorted = found
       .sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }))
@@ -101,7 +103,7 @@ export async function GET() {
     }
 
     return Response.json({
-      folder: root?.name || 'My Music',
+      folder: root.name || 'My Music',
       albums: Array.from(albums.values()),
       singles,
       songs: sorted,
