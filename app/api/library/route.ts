@@ -39,52 +39,54 @@ function getQuality(fileName: string): string {
   return format === 'M4A' ? 'M4A • Original file' : `${format} • Original file`;
 }
 
+async function walkFolder(folder: any, pathParts: string[], songs: Omit<LibrarySong, 'id'>[]) {
+  const children = Array.isArray(folder.children) ? folder.children : [];
+
+  for (const child of children) {
+    const name = String(child.name || '');
+    const nextPath = [...pathParts, name];
+
+    if (child.directory) {
+      await walkFolder(child, nextPath, songs);
+      continue;
+    }
+
+    const extension = name.toLowerCase().split('.').pop() || '';
+    if (!AUDIO_EXTENSIONS.has(extension)) continue;
+
+    // Build a direct file share URL from the file object. This avoids trying to
+    // address a file through the shared-folder node during streaming.
+    const directUrl = await child.link();
+    const format = getFormat(name);
+
+    songs.push({
+      title: getTitle(name),
+      artist: 'Unknown Artist',
+      album: pathParts[0] || 'Singles',
+      quality: getQuality(name),
+      fileName: name,
+      path: nextPath.join('/'),
+      format,
+      duration: '--:--',
+      stream: `/api/track?url=${encodeURIComponent(directUrl)}`,
+    });
+  }
+}
+
 export async function GET() {
   try {
     const root = MEGAFile.fromURL(MEGA_FOLDER_URL);
     await root.loadAttributes();
 
-    const albums = new Map<string, Album>();
-    const singles: LibrarySong[] = [];
-    const allSongs: Omit<LibrarySong, 'id'>[] = [];
+    const found: Omit<LibrarySong, 'id'>[] = [];
+    await walkFolder(root, [], found);
 
-    const walk = async (folder: any, pathParts: string[] = []) => {
-      const children = Array.isArray(folder.children) ? folder.children : [];
-
-      for (const child of children) {
-        const name = String(child.name || '');
-        const nextPath = [...pathParts, name];
-
-        if (child.directory || Array.isArray(child.children)) {
-          await walk(child, nextPath);
-          continue;
-        }
-
-        const extension = name.toLowerCase().split('.').pop() || '';
-        if (!AUDIO_EXTENSIONS.has(extension)) continue;
-
-        const format = getFormat(name);
-        const song: Omit<LibrarySong, 'id'> = {
-          title: getTitle(name),
-          artist: 'Unknown Artist',
-          album: pathParts[0] || 'Singles',
-          quality: getQuality(name),
-          fileName: name,
-          path: nextPath.join('/'),
-          format,
-          duration: '--:--',
-          stream: `/api/track?path=${encodeURIComponent(nextPath.join('/'))}`,
-        };
-
-        allSongs.push(song);
-      }
-    };
-
-    await walk(root);
-
-    const sorted = allSongs
+    const sorted = found
       .sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }))
       .map((song, index) => ({ ...song, id: index + 1 }));
+
+    const albums = new Map<string, Album>();
+    const singles: LibrarySong[] = [];
 
     for (const song of sorted) {
       const firstFolder = song.path.includes('/') ? song.path.split('/')[0] : null;
