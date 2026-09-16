@@ -36,34 +36,51 @@ async function readAt(file: any, position: number, length: number): Promise<Buff
 }
 
 function cleanText(text: string): string {
-  return text.replace(/\0/g, '').replace(/[\u0001-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim();
+  return text
+    .replace(/\0/g, '')
+    .replace(/[\u0001-\u0008\u000b\u000c\u000e-\u001f]/g, '')
+    .replace(/^(data|utf-8|UTF-8)$/g, '')
+    .trim();
 }
 
-function utf8OrUtf16(data: Buffer): string {
-  if (data.length >= 2 && data[0] === 0xff && data[1] === 0xfe) return cleanText(data.toString('utf16le', 2));
+function decodeValue(data: Buffer): string {
+  const candidates: string[] = [];
+  if (data.length >= 2 && data[0] === 0xff && data[1] === 0xfe) candidates.push(data.toString('utf16le', 2));
   if (data.length >= 2 && data[0] === 0xfe && data[1] === 0xff) {
     const swapped = Buffer.alloc(data.length - 2);
-    for (let i = 2; i + 1 < data.length; i += 2) { swapped[i - 2] = data[i + 1]; swapped[i - 1] = data[i]; }
-    return cleanText(swapped.toString('utf16le'));
+    for (let i = 2; i + 1 < data.length; i += 2) {
+      swapped[i - 2] = data[i + 1];
+      swapped[i - 1] = data[i];
+    }
+    candidates.push(swapped.toString('utf16le'));
   }
-  return cleanText(data.toString('utf8'));
+  candidates.push(data.toString('utf8'));
+  candidates.push(data.toString('latin1'));
+  return candidates.map(cleanText).find(Boolean) || '';
 }
 
-function findItemValue(buffer: Buffer, itemType: string): string {
-  const marker = Buffer.from(itemType, 'latin1');
+function findDataValue(buffer: Buffer, markerText: string): string {
+  const marker = Buffer.from(markerText, 'latin1');
   let pos = 0;
   while ((pos = buffer.indexOf(marker, pos)) !== -1) {
-    // Apple metadata item is normally followed by a data atom: size + "data" + flags/type + payload.
-    const windowEnd = Math.min(buffer.length, pos + 1024);
-    const dataPos = buffer.indexOf(Buffer.from('data', 'ascii'), pos + 4);
-    if (dataPos !== -1 && dataPos < windowEnd && dataPos >= 4) {
-      const dataSize = buffer.readUInt32BE(dataPos - 4);
-      if (dataSize >= 16 && dataPos + 8 < buffer.length) {
-        const payloadStart = dataPos + 8;
-        const payloadEnd = Math.min(buffer.length, dataPos + dataSize);
-        const text = utf8OrUtf16(buffer.subarray(payloadStart, payloadEnd));
-        if (text) return text;
+    const limit = Math.min(buffer.length, pos + 8192);
+    let dataPos = buffer.indexOf(Buffer.from('data', 'ascii'), pos + marker.length);
+    while (dataPos !== -1 && dataPos < limit) {
+      if (dataPos >= 4) {
+        const dataSize = buffer.readUInt32BE(dataPos - 4);
+        if (dataSize >= 16 && dataPos + 8 < buffer.length) {
+          // data atom: header(8) + type/locale payload header(8) + value.
+          const starts = [dataPos + 16, dataPos + 12, dataPos + 8];
+          for (const start of starts) {
+            const end = Math.min(buffer.length, dataPos + dataSize);
+            if (start < end) {
+              const text = decodeValue(buffer.subarray(start, end));
+              if (text) return text;
+            }
+          }
+        }
       }
+      dataPos = buffer.indexOf(Buffer.from('data', 'ascii'), dataPos + 4);
     }
     pos += marker.length;
   }
@@ -74,48 +91,70 @@ function findFreeformValue(buffer: Buffer, name: string): string {
   const nameMarker = Buffer.from(name, 'utf8');
   let pos = 0;
   while ((pos = buffer.indexOf(nameMarker, pos)) !== -1) {
-    const dataPos = buffer.indexOf(Buffer.from('data', 'ascii'), pos + nameMarker.length);
-    if (dataPos !== -1 && dataPos < pos + 2048 && dataPos + 8 < buffer.length) {
-      const dataSize = buffer.readUInt32BE(dataPos - 4);
-      if (dataSize >= 16) {
-        const text = utf8OrUtf16(buffer.subarray(dataPos + 8, Math.min(buffer.length, dataPos + dataSize)));
-        if (text) return text;
+    const searchEnd = Math.min(buffer.length, pos + 8192);
+    let dataPos = buffer.indexOf(Buffer.from('data', 'ascii'), pos + nameMarker.length);
+    while (dataPos !== -1 && dataPos < searchEnd) {
+      if (dataPos >= 4) {
+        const dataSize = buffer.readUInt32BE(dataPos - 4);
+        if (dataSize >= 16) {
+          const starts = [dataPos + 16, dataPos + 12, dataPos + 8];
+          const end = Math.min(buffer.length, dataPos + dataSize);
+          for (const start of starts) {
+            if (start < end) {
+              const text = decodeValue(buffer.subarray(start, end));
+              if (text) return text;
+            }
+          }
+        }
       }
+      dataPos = buffer.indexOf(Buffer.from('data', 'ascii'), dataPos + 4);
     }
     pos += nameMarker.length;
   }
   return '';
 }
 
+function splitPeople(value: string): string[] {
+  return value
+    .split(/[;\n\r\u000b]+/)
+    .map(cleanText)
+    .filter(Boolean);
+}
+
 async function readAppleAtoms(file: any): Promise<{ albumArtist: string; artists: string[]; composers: string[] }> {
   const size = Number(file?.size || 0);
   if (!size) return { albumArtist: '', artists: [], composers: [] };
 
-  const headLength = Math.min(size, 1024 * 1024);
+  // M4A metadata is commonly stored in/near the moov atom, frequently at the end.
+  // Read enough from both ends to cover large cover-art-free metadata sections.
+  const headLength = Math.min(size, 2 * 1024 * 1024);
   const head = await readAt(file, 0, headLength);
-  const tailLength = size > headLength ? Math.min(size, 512 * 1024) : 0;
-  const tail = tailLength ? await readAt(file, size - tailLength, tailLength) : Buffer.alloc(0);
+  const tailLength = size > headLength ? Math.min(size, 4 * 1024 * 1024) : 0;
+  const tail = tailLength ? await readAt(file, Math.max(0, size - tailLength), tailLength) : Buffer.alloc(0);
   const buffer = tail.length ? Buffer.concat([head, tail]) : head;
 
-  const artist = findItemValue(buffer, '©ART');
-  const albumArtist = findItemValue(buffer, 'aART');
-  const composer = findItemValue(buffer, '©wrt') || findItemValue(buffer, '©com');
+  const artist = findDataValue(buffer, '©ART');
+  const albumArtist = findDataValue(buffer, 'aART');
+  const composer = findDataValue(buffer, '©wrt') || findDataValue(buffer, '©com');
+
+  // Some tagging tools store Windows/iTunes "Contributing artists" in a freeform ARTISTS field.
   const contributingRaw = findFreeformValue(buffer, 'ARTISTS');
-  const artists = (contributingRaw || artist)
-    .split(/[;,]\s*/)
-    .map(cleanText)
-    .filter(Boolean);
+  const artists = splitPeople(contributingRaw || artist);
 
   return {
-    albumArtist,
-    artists: artists.length ? artists : (artist ? [artist] : []),
-    composers: composer ? composer.split(/[;,]\s*/).map(cleanText).filter(Boolean) : [],
+    albumArtist: cleanText(albumArtist),
+    artists: artists.length ? artists : (artist ? [cleanText(artist)] : []),
+    composers: splitPeople(composer),
   };
 }
 
 function list(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String).map(v => v.trim()).filter(Boolean);
   return value ? [String(value).trim()] : [];
+}
+
+function dedupe(values: string[]): string[] {
+  return Array.from(new Set(values.map(cleanText).filter(Boolean)));
 }
 
 async function one(file: any, id: string): Promise<MetaResult> {
@@ -128,27 +167,35 @@ async function one(file: any, id: string): Promise<MetaResult> {
       extension,
       read: (offset: number, length: number) => readAt(file, offset, length),
     });
-    const apple = extension === 'm4a' || extension === 'm4b' || extension === 'mp4'
+
+    const apple = ['m4a', 'm4b', 'mp4'].includes(extension)
       ? await readAppleAtoms(file)
       : { albumArtist: '', artists: [], composers: [] };
 
-    const artist = String(basic?.artist || '').trim();
-    const artists = apple.artists.length ? apple.artists : (artist ? [artist] : []);
-    const albumArtist = apple.albumArtist.trim();
-    const composers = apple.composers;
+    const basicArtist = String(basic?.artist || '').trim();
+    const basicArtists = list((basic as any)?.artists || basicArtist);
+    const artists = dedupe([
+      ...apple.artists,
+      ...basicArtists,
+    ]);
+    const albumArtist = apple.albumArtist || String((basic as any)?.albumartist || '').trim();
+    const displayArtist = artists[0] || albumArtist || 'Unknown Artist';
 
     return {
       id,
       title: String(basic?.title || '').trim(),
       album: String(basic?.album || '').trim(),
-      artist: artist || artists[0] || '',
+      artist: displayArtist,
       artists,
       albumArtist,
       albumArtists: albumArtist ? [albumArtist] : [],
-      composers,
+      composers: dedupe([
+        ...apple.composers,
+        ...list((basic as any)?.composer),
+      ]),
       genre: basic?.genre ? list(basic.genre) : [],
       year: typeof basic?.year === 'number' ? basic.year : null,
-      track: null,
+      track: (basic as any)?.track || null,
     };
   } catch (error) {
     console.warn(`Metadata extraction failed for ${fileName}:`, error);
@@ -182,7 +229,7 @@ export async function GET(request: NextRequest) {
     const files = await findFiles(root);
     const selected = ids.filter(id => files.has(id));
     const results: MetaResult[] = [];
-    const concurrency = 3;
+    const concurrency = 2;
     for (let i = 0; i < selected.length; i += concurrency) {
       const chunk = selected.slice(i, i + concurrency);
       results.push(...await Promise.all(chunk.map(id => one(files.get(id), id))));
