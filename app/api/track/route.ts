@@ -16,9 +16,13 @@ export async function GET(request: NextRequest) {
     await file.loadAttributes();
 
     const size = Number(file.size || 0);
+    if (!size) {
+      return new Response('MEGA file has no readable size', { status: 502 });
+    }
+
     const range = request.headers.get('range');
     let start = 0;
-    let end = Math.max(0, size - 1);
+    let end = size - 1;
 
     if (range) {
       const match = range.match(/bytes=(\d*)-(\d*)/);
@@ -37,11 +41,21 @@ export async function GET(request: NextRequest) {
     }
 
     const length = end - start + 1;
-    const megaStream = file.download({ start, end });
+
+    // Vercel runs this route on Node. Force HTTPS for MEGA's download URL
+    // and use one connection for the most reliable server-side streaming.
+    const megaStream = file.download({
+      start,
+      end,
+      maxConnections: 1,
+      forceHttps: true,
+    });
 
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        megaStream.on('data', (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
+        megaStream.on('data', (chunk: Buffer) => {
+          controller.enqueue(new Uint8Array(chunk));
+        });
         megaStream.on('end', () => controller.close());
         megaStream.on('error', (error: Error) => controller.error(error));
       },
@@ -64,6 +78,7 @@ export async function GET(request: NextRequest) {
     return new Response(body, { status: range ? 206 : 200, headers });
   } catch (error) {
     console.error('MEGA streaming error:', error);
-    return new Response('Unable to stream the MEGA file', { status: 502 });
+    const message = error instanceof Error ? error.message : String(error);
+    return new Response(`Unable to stream the MEGA file: ${message}`, { status: 502 });
   }
 }
