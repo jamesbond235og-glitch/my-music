@@ -8,11 +8,8 @@ const MP3_URL = process.env.MEGA_TEST_URL;
 const M4A_URL = 'https://mega.nz/file/Jz4SAZIK#7cJMxdT44BN9QIh6ea_neDwqvs5ztaj2OepUe0tqfjw';
 
 function getAudioContentType(format: string | null, fileName: string): string {
-  // Prefer the explicitly requested format so a MEGA filename without an
-  // extension cannot cause the browser to receive application/octet-stream.
   if (format === 'm4a') return 'audio/mp4';
   if (format === 'mp3') return 'audio/mpeg';
-
   const extension = fileName.toLowerCase().split('.').pop();
   switch (extension) {
     case 'mp3': return 'audio/mpeg';
@@ -31,9 +28,7 @@ export async function GET(request: NextRequest) {
   const format = request.nextUrl.searchParams.get('format');
   const megaUrl = format === 'm4a' ? M4A_URL : MP3_URL;
 
-  if (!megaUrl) {
-    return new Response('MEGA_TEST_URL is not configured', { status: 500 });
-  }
+  if (!megaUrl) return new Response('MEGA_TEST_URL is not configured', { status: 500 });
 
   try {
     const file = File.fromURL(megaUrl);
@@ -49,21 +44,30 @@ export async function GET(request: NextRequest) {
     let end = size - 1;
 
     if (range) {
-      const match = range.match(/bytes=(\d*)-(\d*)/);
+      const match = range.match(/^bytes=(\d*)-(\d*)$/);
       if (!match) return new Response('Invalid Range', { status: 416 });
 
-      if (match[1]) start = Number(match[1]);
-      if (match[2]) end = Number(match[2]);
-      else end = size - 1;
+      const startText = match[1];
+      const endText = match[2];
 
-      // Handle suffix byte ranges correctly: bytes=-N.
-      if (!match[1] && match[2]) {
-        const suffixLength = Number(match[2]);
-        start = Math.max(0, size - suffixLength);
-        end = size - 1;
+      if (startText === '' && endText === '') {
+        return new Response('Invalid Range', { status: 416 });
       }
 
-      if (start >= size || end >= size || start > end) {
+      if (startText === '') {
+        // RFC 7233 suffix range: bytes=-N means the last N bytes.
+        const suffixLength = Number(endText);
+        if (!Number.isFinite(suffixLength) || suffixLength <= 0) {
+          return new Response('Invalid Range', { status: 416 });
+        }
+        start = Math.max(0, size - suffixLength);
+        end = size - 1;
+      } else {
+        start = Number(startText);
+        end = endText === '' ? size - 1 : Number(endText);
+      }
+
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < 0 || start >= size || end >= size || start > end) {
         return new Response(null, {
           status: 416,
           headers: { 'Content-Range': `bytes */${size}` },
@@ -98,9 +102,7 @@ export async function GET(request: NextRequest) {
       'Cache-Control': 'private, no-store',
     });
 
-    if (range) {
-      headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
-    }
+    if (range) headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
 
     return new Response(body, {
       status: range ? 206 : 200,
