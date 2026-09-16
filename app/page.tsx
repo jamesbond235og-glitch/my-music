@@ -57,7 +57,11 @@ export default function Page(){
       const frameCount=decoded.channelData[0]?.length??0;
       if(!channels||!frameCount)throw new Error('ALAC decoder returned no audio samples');
       const buffer=ctx.createBuffer(channels,frameCount,decoded.sampleRate);
-      decoded.channelData.forEach((channel,index)=>buffer.copyToChannel(channel,index));
+      decoded.channelData.forEach((channel,index)=>{
+        // Avoid a TypeScript ArrayBufferLike vs ArrayBuffer mismatch by copying
+        // through the AudioBuffer's own Float32Array view.
+        buffer.getChannelData(index).set(channel);
+      });
       alacBufferRef.current=buffer;
       setDuration(buffer.duration);
       return buffer;
