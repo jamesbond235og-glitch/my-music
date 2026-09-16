@@ -14,6 +14,7 @@ type LibrarySong = {
   quality: string;
   fileName: string;
   path: string;
+  fileId: string;
   format: string;
   duration: string;
   stream: string;
@@ -54,9 +55,9 @@ async function walkFolder(folder: any, pathParts: string[], songs: Omit<LibraryS
     const extension = name.toLowerCase().split('.').pop() || '';
     if (!AUDIO_EXTENSIONS.has(extension)) continue;
 
-    // Build a direct file share URL from the file object. This avoids trying to
-    // address a file through the shared-folder node during streaming.
-    const directUrl = await child.link();
+    const fileId = String(child.nodeId || '');
+    if (!fileId) continue;
+
     const format = getFormat(name);
 
     songs.push({
@@ -66,17 +67,22 @@ async function walkFolder(folder: any, pathParts: string[], songs: Omit<LibraryS
       quality: getQuality(name),
       fileName: name,
       path: nextPath.join('/'),
+      fileId,
       format,
       duration: '--:--',
-      stream: `/api/track?url=${encodeURIComponent(directUrl)}`,
+      stream: `/api/track?id=${encodeURIComponent(fileId)}`,
     });
   }
 }
 
 export async function GET() {
   try {
-    const root = MEGAFile.fromURL(MEGA_FOLDER_URL);
-    await root.loadAttributes();
+    // Load the shared folder once. Its children are individual MEGA File
+    // objects; each child has its own nodeId that can be addressed through
+    // the documented /folder/.../file/... shared-link form.
+    const folderLink = MEGAFile.fromURL(MEGA_FOLDER_URL);
+    const loaded = await folderLink.loadAttributes();
+    const root = loaded || folderLink;
 
     const found: Omit<LibrarySong, 'id'>[] = [];
     await walkFolder(root, [], found);
