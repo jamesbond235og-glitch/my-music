@@ -23,12 +23,23 @@ function getAudioContentType(fileName: string): string {
 
 async function getSongFile(path: string) {
   if (!path) throw new Error('Missing song path');
-  const folder = MEGAFile.fromURL(MEGA_FOLDER_URL);
-  await folder.loadAttributes();
-  const file = folder.navigate(path);
-  if (!file || file.directory) throw new Error('Song not found in the MEGA music folder');
-  await file.loadAttributes();
-  return file;
+
+  const root = MEGAFile.fromURL(MEGA_FOLDER_URL);
+  await root.loadAttributes();
+
+  let current: any = root;
+  const parts = path.split('/').filter(Boolean);
+
+  for (const part of parts) {
+    const children = Array.isArray(current.children) ? current.children : [];
+    const next = children.find((child: any) => String(child.name || '') === part);
+    if (!next) throw new Error(`Song path not found: ${path}`);
+    current = next;
+  }
+
+  if (current.directory) throw new Error('The requested path is a folder, not a song');
+  await current.loadAttributes();
+  return current;
 }
 
 export async function GET(request: NextRequest) {
@@ -38,8 +49,6 @@ export async function GET(request: NextRequest) {
   try {
     let file: any;
 
-    // Keep compatibility with the previous test URL format while the library
-    // migrates to folder-based paths.
     if (!path && legacyFormat === 'm4a') {
       file = MEGAFile.fromURL('https://mega.nz/file/Jz4SAZIK#7cJMxdT44BN9QIh6ea_neDwqvs5ztaj2OepUe0tqfjw');
       await file.loadAttributes();
