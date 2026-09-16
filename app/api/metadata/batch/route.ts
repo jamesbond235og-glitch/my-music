@@ -1,6 +1,5 @@
 import { File as MEGAFile } from 'megajs';
-import { parseFromTokenizer } from 'music-metadata';
-import type { ITokenizer, IGetToken } from 'strtok3';
+import { extractMetadata } from 'metadata-connect';
 import { NextRequest } from 'next/server';
 
 export const runtime = 'nodejs';
@@ -36,42 +35,82 @@ async function readAt(file: any, position: number, length: number): Promise<Buff
   return Buffer.concat(chunks);
 }
 
-function tokenizerFor(file: any, fileName: string): ITokenizer {
+function cleanText(text: string): string {
+  return text.replace(/\0/g, '').replace(/[\u0001-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim();
+}
+
+function utf8OrUtf16(data: Buffer): string {
+  if (data.length >= 2 && data[0] === 0xff && data[1] === 0xfe) return cleanText(data.toString('utf16le', 2));
+  if (data.length >= 2 && data[0] === 0xfe && data[1] === 0xff) {
+    const swapped = Buffer.alloc(data.length - 2);
+    for (let i = 2; i + 1 < data.length; i += 2) { swapped[i - 2] = data[i + 1]; swapped[i - 1] = data[i]; }
+    return cleanText(swapped.toString('utf16le'));
+  }
+  return cleanText(data.toString('utf8'));
+}
+
+function findItemValue(buffer: Buffer, itemType: string): string {
+  const marker = Buffer.from(itemType, 'latin1');
+  let pos = 0;
+  while ((pos = buffer.indexOf(marker, pos)) !== -1) {
+    // Apple metadata item is normally followed by a data atom: size + "data" + flags/type + payload.
+    const windowEnd = Math.min(buffer.length, pos + 1024);
+    const dataPos = buffer.indexOf(Buffer.from('data', 'ascii'), pos + 4);
+    if (dataPos !== -1 && dataPos < windowEnd && dataPos >= 4) {
+      const dataSize = buffer.readUInt32BE(dataPos - 4);
+      if (dataSize >= 16 && dataPos + 8 < buffer.length) {
+        const payloadStart = dataPos + 8;
+        const payloadEnd = Math.min(buffer.length, dataPos + dataSize);
+        const text = utf8OrUtf16(buffer.subarray(payloadStart, payloadEnd));
+        if (text) return text;
+      }
+    }
+    pos += marker.length;
+  }
+  return '';
+}
+
+function findFreeformValue(buffer: Buffer, name: string): string {
+  const nameMarker = Buffer.from(name, 'utf8');
+  let pos = 0;
+  while ((pos = buffer.indexOf(nameMarker, pos)) !== -1) {
+    const dataPos = buffer.indexOf(Buffer.from('data', 'ascii'), pos + nameMarker.length);
+    if (dataPos !== -1 && dataPos < pos + 2048 && dataPos + 8 < buffer.length) {
+      const dataSize = buffer.readUInt32BE(dataPos - 4);
+      if (dataSize >= 16) {
+        const text = utf8OrUtf16(buffer.subarray(dataPos + 8, Math.min(buffer.length, dataPos + dataSize)));
+        if (text) return text;
+      }
+    }
+    pos += nameMarker.length;
+  }
+  return '';
+}
+
+async function readAppleAtoms(file: any): Promise<{ albumArtist: string; artists: string[]; composers: string[] }> {
   const size = Number(file?.size || 0);
-  const tokenizer: any = {
-    fileInfo: { size, path: fileName, mimeType: 'application/octet-stream' },
-    position: 0,
-    async readBuffer(target: Uint8Array, options: any = {}) {
-      const position = Number.isFinite(options.position) ? Number(options.position) : tokenizer.position;
-      const length = Number.isFinite(options.length) ? Number(options.length) : target.byteLength;
-      const data = await readAt(file, position, length);
-      target.set(data.subarray(0, target.byteLength));
-      if (options.position === undefined) tokenizer.position = position + data.length;
-      return data.length;
-    },
-    async peekBuffer(target: Uint8Array, options: any = {}) {
-      const position = Number.isFinite(options.position) ? Number(options.position) : tokenizer.position;
-      const length = Number.isFinite(options.length) ? Number(options.length) : target.byteLength;
-      const data = await readAt(file, position, length);
-      target.set(data.subarray(0, target.byteLength));
-      return data.length;
-    },
-    async readToken(token: IGetToken<any>, position = tokenizer.position) {
-      const data = await readAt(file, position, token.len);
-      if (data.length < token.len) throw new Error('Unexpected end of file');
-      tokenizer.position = position + token.len;
-      return token.get(data, 0);
-    },
-    async peekToken(token: IGetToken<any>, position = tokenizer.position) {
-      const data = await readAt(file, position, token.len);
-      if (data.length < token.len) throw new Error('Unexpected end of file');
-      return token.get(data, 0);
-    },
-    async readNumber(token: IGetToken<number>) { return tokenizer.readToken(token); },
-    async ignore(length: number) { tokenizer.position = Math.min(size, tokenizer.position + length); return length; },
-    async close() {},
+  if (!size) return { albumArtist: '', artists: [], composers: [] };
+
+  const headLength = Math.min(size, 1024 * 1024);
+  const head = await readAt(file, 0, headLength);
+  const tailLength = size > headLength ? Math.min(size, 512 * 1024) : 0;
+  const tail = tailLength ? await readAt(file, size - tailLength, tailLength) : Buffer.alloc(0);
+  const buffer = tail.length ? Buffer.concat([head, tail]) : head;
+
+  const artist = findItemValue(buffer, '©ART');
+  const albumArtist = findItemValue(buffer, 'aART');
+  const composer = findItemValue(buffer, '©wrt') || findItemValue(buffer, '©com');
+  const contributingRaw = findFreeformValue(buffer, 'ARTISTS');
+  const artists = (contributingRaw || artist)
+    .split(/[;,]\s*/)
+    .map(cleanText)
+    .filter(Boolean);
+
+  return {
+    albumArtist,
+    artists: artists.length ? artists : (artist ? [artist] : []),
+    composers: composer ? composer.split(/[;,]\s*/).map(cleanText).filter(Boolean) : [],
   };
-  return tokenizer as ITokenizer;
 }
 
 function list(value: unknown): string[] {
@@ -79,45 +118,57 @@ function list(value: unknown): string[] {
   return value ? [String(value).trim()] : [];
 }
 
-function walk(folder: any, out: Map<string, any>) {
-  const children = Array.isArray(folder?.children) ? folder.children : [];
-  for (const child of children) {
-    const id = String(child?.nodeId || child?.downloadId || '');
-    if (id) out.set(id, child);
-    if (child?.directory || Array.isArray(child?.children)) walk(child, out);
-  }
-}
-
 async function one(file: any, id: string): Promise<MetaResult> {
   const fileName = String(file?.name || '');
   const extension = fileName.toLowerCase().split('.').pop() || '';
+  const size = Number(file?.size || 0);
   try {
-    const metadata = await parseFromTokenizer(tokenizerFor(file, fileName), {
-      skipCovers: true,
-      duration: false,
-      skipPostHeaders: true,
+    const basic = await extractMetadata({
+      size,
+      extension,
+      read: (offset: number, length: number) => readAt(file, offset, length),
     });
-    const common: any = metadata?.common || {};
-    const artists = list(common.artists || common.artist);
-    const albumArtists = list(common.albumartists || common.albumartist);
-    const composers = list(common.composer);
+    const apple = extension === 'm4a' || extension === 'm4b' || extension === 'mp4'
+      ? await readAppleAtoms(file)
+      : { albumArtist: '', artists: [], composers: [] };
+
+    const artist = String(basic?.artist || '').trim();
+    const artists = apple.artists.length ? apple.artists : (artist ? [artist] : []);
+    const albumArtist = apple.albumArtist.trim();
+    const composers = apple.composers;
+
     return {
       id,
-      title: String(common.title || '').trim(),
-      album: String(common.album || '').trim(),
-      artist: String(common.artist || artists[0] || '').trim(),
+      title: String(basic?.title || '').trim(),
+      album: String(basic?.album || '').trim(),
+      artist: artist || artists[0] || '',
       artists,
-      albumArtist: String(common.albumartist || albumArtists[0] || '').trim(),
-      albumArtists,
+      albumArtist,
+      albumArtists: albumArtist ? [albumArtist] : [],
       composers,
-      genre: list(common.genre),
-      year: typeof common.year === 'number' ? common.year : null,
-      track: common.track || null,
+      genre: basic?.genre ? list(basic.genre) : [],
+      year: typeof basic?.year === 'number' ? basic.year : null,
+      track: null,
     };
   } catch (error) {
     console.warn(`Metadata extraction failed for ${fileName}:`, error);
     return { id, title: '', album: '', artist: '', artists: [], albumArtist: '', albumArtists: [], composers: [], genre: [], year: null, track: null };
   }
+}
+
+async function findFiles(root: any): Promise<Map<string, any>> {
+  const out = new Map<string, any>();
+  const queue = [root];
+  while (queue.length) {
+    const folder = queue.shift();
+    const children = Array.isArray(folder?.children) ? folder.children : [];
+    for (const child of children) {
+      const id = String(child?.nodeId || child?.downloadId || '');
+      if (id) out.set(id, child);
+      if (child?.directory || Array.isArray(child?.children)) queue.push(child);
+    }
+  }
+  return out;
 }
 
 export async function GET(request: NextRequest) {
@@ -128,8 +179,7 @@ export async function GET(request: NextRequest) {
   try {
     const root = MEGAFile.fromURL(MEGA_FOLDER_URL);
     await root.loadAttributes();
-    const files = new Map<string, any>();
-    walk(root, files);
+    const files = await findFiles(root);
     const selected = ids.filter(id => files.has(id));
     const results: MetaResult[] = [];
     const concurrency = 3;
