@@ -82,7 +82,7 @@ async function walkFolder(folder: any, pathParts: string[], songs: Omit<LibraryS
     const nextPath = [...pathParts, name];
 
     if (child?.directory || Array.isArray(child?.children)) {
-      walkFolder(child, nextPath, songs);
+      await walkFolder(child, nextPath, songs);
       continue;
     }
 
@@ -94,7 +94,7 @@ async function walkFolder(folder: any, pathParts: string[], songs: Omit<LibraryS
 
     const metadata = await getMetadata(child, name);
     const title = String(metadata?.title || getTitle(name));
-    const artist = String(metadata?.artist || metadata?.artists?.[0] || 'Unknown Artist');
+    const artist = String(metadata?.artist || 'Unknown Artist');
     const album = String(metadata?.album || pathParts[0] || 'Singles');
 
     songs.push({
