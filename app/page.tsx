@@ -86,19 +86,12 @@ export default function Page(){
           if(!meta)return song;
           const contributing=meta.artists.filter(Boolean);
           const displayArtist=contributing.join(', ') || meta.artist || meta.albumArtist || song.artist;
-          return {
-            ...song,
-            title:meta.title||song.title,
-            album:meta.album||song.album,
-            artist:displayArtist,
-            contributingArtists:contributing,
-            albumArtist:meta.albumArtist||meta.albumArtists[0]||'',
-            composers:meta.composers,
-          };
+          return {...song,title:meta.title||song.title,album:meta.album||song.album,artist:displayArtist,contributingArtists:contributing,albumArtist:meta.albumArtist||meta.albumArtists[0]||'',composers:meta.composers};
         };
         const nextAlbums=albums.map(a=>({...a,songs:a.songs.map(enrich)}));
         const nextSingles=singles.map(enrich);
         setAlbums(nextAlbums);setSingles(nextSingles);
+        setSelectedAlbum(prev=>prev?nextAlbums.find(album=>album.path===prev.path)||prev:prev);
 
         const artistMap=new Map<string,Song[]>();
         const composerMap=new Map<string,Song[]>();
@@ -109,10 +102,7 @@ export default function Page(){
         });
         setArtists(Array.from(artistMap.entries()).sort((a,b)=>a[0].localeCompare(b[0])).map(([name,songs])=>({name,songs})));
         setComposers(Array.from(composerMap.entries()).sort((a,b)=>a[0].localeCompare(b[0])).map(([name,songs])=>({name,songs})));
-        setCurrent(prev=>{
-          if(!prev)return prev;
-          return [...nextAlbums.flatMap(a=>a.songs),...nextSingles].find(song=>song.id===prev.id)||prev;
-        });
+        setCurrent(prev=>prev?[...nextAlbums.flatMap(a=>a.songs),...nextSingles].find(song=>song.id===prev.id)||prev:prev);
       })
       .catch(error=>{console.warn('Metadata enrichment failed:',error)})
       .finally(()=>{if(!cancelled)setMetadataLoading(false)});
@@ -220,12 +210,13 @@ export default function Page(){
   const selectComposer=(composer:Composer)=>{setSelectedComposer(composer.name);setSelectedAlbum(null);setSelectedArtist(null);setQuery('');};
   const goHome=()=>{setSelectedAlbum(null);setSelectedArtist(null);setSelectedComposer(null);setQuery('');};
   const q=query.trim().toLowerCase();
+  const activeAlbum=selectedAlbum?albums.find(album=>album.path===selectedAlbum.path)||selectedAlbum:null;
   const visibleSongs=useMemo(()=>{
     if(q)return allSongs.filter(song=>(`${song.title} ${song.artist} ${song.album} ${song.fileName} ${(song.composers||[]).join(' ')}`).toLowerCase().includes(q));
     if(selectedComposer)return composers.find(c=>c.name===selectedComposer)?.songs||[];
     if(selectedArtist)return artists.find(a=>a.name===selectedArtist)?.songs||[];
-    return selectedAlbum?selectedAlbum.songs:singles;
-  },[q,allSongs,selectedComposer,selectedArtist,selectedAlbum,singles,artists,composers]);
+    return activeAlbum?activeAlbum.songs:singles;
+  },[q,allSongs,selectedComposer,selectedArtist,activeAlbum,singles,artists,composers]);
 
   if(loading)return <div className="grid min-h-screen place-items-center bg-zinc-950 text-sm text-zinc-500">Loading your My Music library…</div>;
 
@@ -245,18 +236,13 @@ export default function Page(){
 
     <main className="md:ml-64">
       <header className="sticky top-0 z-20 flex items-center gap-4 border-b border-white/10 bg-zinc-950/85 px-5 py-4 backdrop-blur-xl"><div className="flex gap-2"><button className="grid h-9 w-9 place-items-center rounded-full bg-white/5"><ChevronLeft size={18}/></button><button className="grid h-9 w-9 place-items-center rounded-full bg-white/5"><ChevronRight size={18}/></button></div><div className="relative max-w-xl flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search your music" className="w-full rounded-full bg-white/5 py-2.5 pl-10 pr-4 text-sm outline-none ring-1 ring-white/5 focus:ring-white/20"/></div><div className="hidden items-center gap-2 sm:flex"><div className="grid h-9 w-9 place-items-center rounded-full bg-zinc-800"><UserRound size={17}/></div><span className="text-sm">You</span></div></header>
-
-      <section className="p-5 md:p-10">
-        <div className="mb-10"><p className="mb-2 text-sm text-zinc-500">YOUR PERSONAL LIBRARY</p><h1 className="text-4xl font-bold tracking-tight md:text-5xl">Good evening.</h1><p className="mt-3 text-zinc-500">Your MEGA folders are your albums. Put <strong className="text-zinc-300">cover.jpg</strong>, <strong className="text-zinc-300">cover.png</strong>, or <strong className="text-zinc-300">cover.webp</strong> inside an album folder for its artwork.</p>{metadataLoading&&<p className="mt-2 text-xs text-zinc-600">Reading embedded artist and composer tags…</p>}</div>
+      <section className="p-5 md:p-10"><div className="mb-10"><p className="mb-2 text-sm text-zinc-500">YOUR PERSONAL LIBRARY</p><h1 className="text-4xl font-bold tracking-tight md:text-5xl">Good evening.</h1><p className="mt-3 text-zinc-500">Your MEGA folders are your albums. Add <strong className="text-zinc-300">cover.jpg</strong>, <strong className="text-zinc-300">cover.png</strong>, or <strong className="text-zinc-300">cover.webp</strong> inside an album folder for its artwork.</p></div>
         {libraryError&&<div className="mb-6 rounded-xl border border-red-400/30 bg-red-950/60 px-4 py-3 text-sm text-red-200">{libraryError}</div>}
-
         {!q&&!selectedAlbum&&!selectedArtist&&!selectedComposer&&<div className="mb-12"><div className="mb-4 flex items-center justify-between"><h2 className="text-xl font-semibold">Your albums</h2><span className="text-sm text-zinc-500">{albums.length} folders</span></div><div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">{albums.map((album,i)=><button key={album.path} onClick={()=>selectAlbum(album)} className="group text-left"><div className="relative mb-3 aspect-square overflow-hidden rounded-2xl shadow-2xl transition group-hover:scale-[1.02]">{album.cover?<img src={album.cover} alt={`${album.name} cover`} className="h-full w-full object-cover" loading="lazy"/>:<div style={{background:fallbackCover(i)}} className="flex h-full w-full items-end p-5"><Disc3 className="opacity-30" size={42}/></div>}<div className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-black/45 backdrop-blur"><FolderOpen size={16}/></div></div><div className="truncate font-medium">{album.name}</div><div className="truncate text-sm text-zinc-500">{album.songs.length} songs</div></button>)}</div></div>}
-
-        {selectedComposer&&!q&&<div className="mb-6 flex items-center gap-3"><button onClick={goHome} className="grid h-8 w-8 place-items-center rounded-full bg-white/5 hover:bg-white/10"><ArrowLeft size={16}/></button><div><h2 className="text-xl font-semibold">{selectedComposer}</h2><div className="text-xs text-zinc-500">{visibleSongs.length} songs composed by this artist</div></div></div>}
+        {selectedComposer&&!q&&<div className="mb-6 flex items-center gap-3"><button onClick={goHome} className="grid h-8 w-8 place-items-center rounded-full bg-white/5 hover:bg-white/10"><ArrowLeft size={16}/></button><div><h2 className="text-xl font-semibold">{selectedComposer}</h2><div className="text-xs text-zinc-500">{visibleSongs.length} songs by this composer</div></div></div>}
         {selectedArtist&&!q&&!selectedComposer&&<div className="mb-6 flex items-center gap-3"><button onClick={goHome} className="grid h-8 w-8 place-items-center rounded-full bg-white/5 hover:bg-white/10"><ArrowLeft size={16}/></button><div><h2 className="text-xl font-semibold">{selectedArtist}</h2><div className="text-xs text-zinc-500">{visibleSongs.length} songs by this artist</div></div></div>}
-        {selectedAlbum&&!q&&!selectedArtist&&!selectedComposer&&<div className="mb-6 flex items-center gap-3"><button onClick={goHome} className="grid h-8 w-8 place-items-center rounded-full bg-white/5 hover:bg-white/10"><ArrowLeft size={16}/></button><div><h2 className="text-xl font-semibold">{selectedAlbum.name}</h2><div className="text-xs text-zinc-500">Songs inside this MEGA folder</div></div></div>}
-
-        {(q||selectedAlbum||selectedArtist||selectedComposer)&&<div><div className="mb-4 flex items-center justify-between">{q&&<h2 className="text-xl font-semibold">Search results</h2>}<span className="text-sm text-zinc-500">{visibleSongs.length} tracks</span></div><div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">{visibleSongs.length?visibleSongs.map((song,i)=><div key={`${song.id}-${song.path}`} className={`group flex items-center gap-4 border-b border-white/5 px-4 py-3 last:border-0 hover:bg-white/5 ${current?.id===song.id?'bg-white/5':''}`}><div className="grid w-6 place-items-center text-xs text-zinc-600">{i+1}</div><div className="h-11 w-11 shrink-0 overflow-hidden rounded-lg">{song.cover?<img src={song.cover} alt="" className="h-full w-full object-cover" loading="lazy"/>:<div style={{background:fallbackCover(i)}} className="h-full w-full"/>}</div><button onClick={()=>void playSong(song)} className="min-w-0 flex-1 text-left"><div className="truncate font-medium">{song.title}</div><div className="truncate text-sm text-zinc-500">{song.artist} · {song.album}</div></button><div className="hidden text-right text-xs text-zinc-500 lg:block">{song.quality}<br/>{song.composers?.length?`Composer: ${song.composers.join(', ')}`:''}</div><button aria-label={current?.id===song.id&&playing?'Pause':'Play'} onClick={()=>void playSong(song)} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-black opacity-0 transition group-hover:opacity-100 focus:opacity-100">{current?.id===song.id&&playing?<Pause size={15} fill="currentColor"/>:<Play size={15} fill="currentColor"/>}</button></div>):<div className="px-5 py-10 text-center text-sm text-zinc-500">No songs in this view.</div>}</div></div>}
+        {selectedAlbum&&!q&&!selectedArtist&&!selectedComposer&&<div className="mb-6 flex items-center gap-3"><button onClick={goHome} className="grid h-8 w-8 place-items-center rounded-full bg-white/5 hover:bg-white/10"><ArrowLeft size={16}/></button><div><h2 className="text-xl font-semibold">{activeAlbum?.name||selectedAlbum.name}</h2><div className="text-xs text-zinc-500">Songs inside this MEGA folder</div></div></div>}
+        {(q||selectedAlbum||selectedArtist||selectedComposer||visibleSongs.length>0)&&<div><div className="mb-4 flex items-center justify-between">{q&&<h2 className="text-xl font-semibold">Search results</h2>}<span className="text-sm text-zinc-500">{visibleSongs.length} tracks</span></div><div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">{visibleSongs.length?visibleSongs.map((song,i)=><div key={`${song.id}-${song.path}`} className={`group flex items-center gap-4 border-b border-white/5 px-4 py-3 last:border-0 hover:bg-white/5 ${current?.id===song.id?'bg-white/5':''}`}><div className="grid w-6 place-items-center text-xs text-zinc-600">{i+1}</div><div className="h-11 w-11 shrink-0 overflow-hidden rounded-lg">{song.cover?<img src={song.cover} alt="" className="h-full w-full object-cover" loading="lazy"/>:<div style={{background:fallbackCover(i)}} className="h-full w-full"/>}</div><button onClick={()=>void playSong(song)} className="min-w-0 flex-1 text-left"><div className="truncate font-medium">{song.title}</div><div className="truncate text-sm text-zinc-500">{song.artist} · {song.album}</div></button><div className="hidden text-xs text-zinc-500 lg:block">{song.quality}</div><button aria-label={current?.id===song.id&&playing?'Pause':'Play'} onClick={()=>void playSong(song)} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-black opacity-0 transition group-hover:opacity-100 focus:opacity-100">{current?.id===song.id&&playing?<Pause size={15} fill="currentColor"/>:<Play size={15} fill="currentColor"/>}</button></div>):<div className="px-5 py-10 text-center text-sm text-zinc-500">No songs in this folder.</div>}</div></div>}
       </section>
     </main>
 
