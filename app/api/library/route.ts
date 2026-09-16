@@ -45,9 +45,6 @@ function walkFolder(folder: any, pathParts: string[], songs: Omit<LibrarySong, '
 
     const nextPath = [...pathParts, name];
 
-    // A shared-folder directory already exposes its child nodes after the
-    // root folder has been loaded. Do not call loadAttributes() on every
-    // child: that can trigger invalid EARGS requests against the share API.
     if (child?.directory || Array.isArray(child?.children)) {
       walkFolder(child, nextPath, songs);
       continue;
@@ -56,9 +53,6 @@ function walkFolder(folder: any, pathParts: string[], songs: Omit<LibrarySong, '
     const extension = name.toLowerCase().split('.').pop() || '';
     if (!AUDIO_EXTENSIONS.has(extension)) continue;
 
-    const fileId = String(child?.nodeId || child?.downloadId || '');
-    if (!fileId) continue;
-
     songs.push({
       title: getTitle(name),
       artist: 'Unknown Artist',
@@ -66,18 +60,16 @@ function walkFolder(folder: any, pathParts: string[], songs: Omit<LibrarySong, '
       quality: getQuality(name),
       fileName: name,
       path: nextPath.join('/'),
-      fileId,
+      fileId: String(child?.nodeId || child?.downloadId || ''),
       format: getFormat(name),
       duration: '--:--',
-      stream: `/api/track?id=${encodeURIComponent(fileId)}`,
+      stream: `/api/track?path=${encodeURIComponent(nextPath.join('/'))}`,
     });
   }
 }
 
 export async function GET() {
   try {
-    // Load the modern shared-folder URL. MEGAJS populates .children on the
-    // folder object; the promise return value is not needed for folder scans.
     const root = MEGAFile.fromURL(MEGA_FOLDER_URL);
     await root.loadAttributes();
 
@@ -103,7 +95,7 @@ export async function GET() {
     }
 
     return Response.json({
-      folder: root.name || 'My Music',
+      folder: root?.name || 'My Music',
       albums: Array.from(albums.values()),
       singles,
       songs: sorted,
