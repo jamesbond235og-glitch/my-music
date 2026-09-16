@@ -19,6 +19,12 @@ type LibrarySong = {
   stream: string;
 };
 
+type Album = {
+  name: string;
+  path: string;
+  songs: LibrarySong[];
+};
+
 function getFormat(fileName: string): string {
   const extension = fileName.toLowerCase().split('.').pop() || '';
   return extension === 'm4b' ? 'm4a' : extension;
@@ -38,7 +44,9 @@ export async function GET() {
     const root = MEGAFile.fromURL(MEGA_FOLDER_URL);
     await root.loadAttributes();
 
-    const found: Omit<LibrarySong, 'id'>[] = [];
+    const albums = new Map<string, Album>();
+    const singles: LibrarySong[] = [];
+    const allSongs: Omit<LibrarySong, 'id'>[] = [];
 
     const walk = async (folder: any, pathParts: string[] = []) => {
       const children = Array.isArray(folder.children) ? folder.children : [];
@@ -56,29 +64,55 @@ export async function GET() {
         if (!AUDIO_EXTENSIONS.has(extension)) continue;
 
         const format = getFormat(name);
-        const album = pathParts.length ? pathParts[pathParts.length - 1] : 'My Music';
-
-        found.push({
+        const song: Omit<LibrarySong, 'id'> = {
           title: getTitle(name),
           artist: 'Unknown Artist',
-          album,
+          album: pathParts[0] || 'Singles',
           quality: getQuality(name),
           fileName: name,
           path: nextPath.join('/'),
           format,
           duration: '--:--',
           stream: `/api/track?path=${encodeURIComponent(nextPath.join('/'))}`,
-        });
+        };
+
+        allSongs.push(song);
       }
     };
 
     await walk(root);
 
-    const songs: LibrarySong[] = found
+    const sorted = allSongs
       .sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }))
       .map((song, index) => ({ ...song, id: index + 1 }));
 
-    return Response.json({ songs });
+    for (const song of sorted) {
+      const firstFolder = song.path.includes('/') ? song.path.split('/')[0] : null;
+      if (!firstFolder) {
+        singles.push(song);
+        continue;
+      }
+
+      const existing = albums.get(firstFolder);
+      if (existing) {
+        existing.songs.push(song);
+      } else {
+        albums.set(firstFolder, {
+          name: firstFolder,
+          path: firstFolder,
+          songs: [song],
+        });
+      }
+    }
+
+    return Response.json({
+      folder: root.name || 'My Music',
+      albums: Array.from(albums.values()),
+      singles,
+      songs: sorted,
+    }, {
+      headers: { 'Cache-Control': 'no-store' },
+    });
   } catch (error) {
     console.error('MEGA library scan error:', error);
     const message = error instanceof Error ? error.message : String(error);
