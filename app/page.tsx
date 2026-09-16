@@ -161,14 +161,18 @@ export default function Page(){
     setPlaying(true);
   };
 
+  // Browsing the library must never control playback. The current player
+  // continues while the user opens another album/artist or returns home.
   const selectAlbum=(album:Album)=>{
-    setSelectedAlbum(album);setSelectedArtist(null);setQuery('');
-    if(current?.id!==album.songs[0]?.id){clearLoadedTrack();setCurrent(album.songs[0]||null);setPlaying(false)}
+    setSelectedAlbum(album);
+    setSelectedArtist(null);
+    setQuery('');
   };
 
   const selectArtist=(artist:Artist)=>{
-    setSelectedArtist(artist.name);setSelectedAlbum(null);setQuery('');
-    if(current?.id!==artist.songs[0]?.id){clearLoadedTrack();setCurrent(artist.songs[0]||null);setPlaying(false)}
+    setSelectedArtist(artist.name);
+    setSelectedAlbum(null);
+    setQuery('');
   };
 
   const goHome=()=>{setSelectedAlbum(null);setSelectedArtist(null);setQuery('');};
@@ -187,7 +191,7 @@ export default function Page(){
       <div className="mb-10 flex items-center gap-3"><div className="grid h-10 w-10 place-items-center rounded-xl bg-white text-black"><Music2 size={21}/></div><div><div className="font-bold">MY MUSIC</div><div className="text-xs text-zinc-500">MEGA library</div></div></div>
       <nav className="space-y-2">
         <button onClick={goHome} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm text-zinc-400 hover:bg-white/5 hover:text-white"><Home size={18}/>Home</button>
-        <button className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm text-zinc-400 hover:bg-white/5 hover:text-white"><Search size={18}/>Search</button>
+        <button onClick={()=>{setSelectedAlbum(null);setSelectedArtist(null);}} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm text-zinc-400 hover:bg-white/5 hover:text-white"><Search size={18}/>Search</button>
         <button onClick={goHome} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm text-zinc-400 hover:bg-white/5 hover:text-white"><Library size={18}/>Your Library</button>
         <button className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm text-zinc-400 hover:bg-white/5 hover:text-white"><Heart size={18}/>Favorites</button>
       </nav>
