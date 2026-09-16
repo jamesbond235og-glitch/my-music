@@ -48,6 +48,9 @@ async function walkFolder(folder: any, pathParts: string[], songs: Omit<LibraryS
     const nextPath = [...pathParts, name];
 
     if (child.directory) {
+      // MEGA shared-folder child directories load their own children when
+      // loadAttributes() is called on that directory.
+      await child.loadAttributes();
       await walkFolder(child, nextPath, songs);
       continue;
     }
@@ -55,10 +58,9 @@ async function walkFolder(folder: any, pathParts: string[], songs: Omit<LibraryS
     const extension = name.toLowerCase().split('.').pop() || '';
     if (!AUDIO_EXTENSIONS.has(extension)) continue;
 
+    await child.loadAttributes();
     const fileId = String(child.nodeId || '');
     if (!fileId) continue;
-
-    const format = getFormat(name);
 
     songs.push({
       title: getTitle(name),
@@ -68,7 +70,7 @@ async function walkFolder(folder: any, pathParts: string[], songs: Omit<LibraryS
       fileName: name,
       path: nextPath.join('/'),
       fileId,
-      format,
+      format: getFormat(name),
       duration: '--:--',
       stream: `/api/track?id=${encodeURIComponent(fileId)}`,
     });
@@ -77,9 +79,8 @@ async function walkFolder(folder: any, pathParts: string[], songs: Omit<LibraryS
 
 export async function GET() {
   try {
-    const folderLink = MEGAFile.fromURL(MEGA_FOLDER_URL);
-    const loaded = await folderLink.loadAttributes();
-    const root = loaded || folderLink;
+    const root = MEGAFile.fromURL(MEGA_FOLDER_URL);
+    await root.loadAttributes();
 
     const found: Omit<LibrarySong, 'id'>[] = [];
     await walkFolder(root, [], found);
@@ -99,15 +100,8 @@ export async function GET() {
       }
 
       const existing = albums.get(firstFolder);
-      if (existing) {
-        existing.songs.push(song);
-      } else {
-        albums.set(firstFolder, {
-          name: firstFolder,
-          path: firstFolder,
-          songs: [song],
-        });
-      }
+      if (existing) existing.songs.push(song);
+      else albums.set(firstFolder, { name: firstFolder, path: firstFolder, songs: [song] });
     }
 
     return Response.json({
