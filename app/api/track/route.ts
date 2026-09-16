@@ -7,7 +7,12 @@ export const dynamic = 'force-dynamic';
 const MP3_URL = process.env.MEGA_TEST_URL;
 const M4A_URL = 'https://mega.nz/file/Jz4SAZIK#7cJMxdT44BN9QIh6ea_neDwqvs5ztaj2OepUe0tqfjw';
 
-function getAudioContentType(fileName: string): string {
+function getAudioContentType(format: string | null, fileName: string): string {
+  // Prefer the explicitly requested format so a MEGA filename without an
+  // extension cannot cause the browser to receive application/octet-stream.
+  if (format === 'm4a') return 'audio/mp4';
+  if (format === 'mp3') return 'audio/mpeg';
+
   const extension = fileName.toLowerCase().split('.').pop();
   switch (extension) {
     case 'mp3': return 'audio/mpeg';
@@ -38,7 +43,7 @@ export async function GET(request: NextRequest) {
     if (!size) return new Response('MEGA file has no readable size', { status: 502 });
 
     const fileName = String(file.name || (format === 'm4a' ? 'track.m4a' : 'track.mp3'));
-    const contentType = getAudioContentType(fileName);
+    const contentType = getAudioContentType(format, fileName);
     const range = request.headers.get('range');
     let start = 0;
     let end = size - 1;
@@ -46,16 +51,33 @@ export async function GET(request: NextRequest) {
     if (range) {
       const match = range.match(/bytes=(\d*)-(\d*)/);
       if (!match) return new Response('Invalid Range', { status: 416 });
+
       if (match[1]) start = Number(match[1]);
       if (match[2]) end = Number(match[2]);
       else end = size - 1;
+
+      // Handle suffix byte ranges correctly: bytes=-N.
+      if (!match[1] && match[2]) {
+        const suffixLength = Number(match[2]);
+        start = Math.max(0, size - suffixLength);
+        end = size - 1;
+      }
+
       if (start >= size || end >= size || start > end) {
-        return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}` } });
+        return new Response(null, {
+          status: 416,
+          headers: { 'Content-Range': `bytes */${size}` },
+        });
       }
     }
 
     const length = end - start + 1;
-    const megaStream = file.download({ start, end, maxConnections: 1, forceHttps: true });
+    const megaStream = file.download({
+      start,
+      end,
+      maxConnections: 1,
+      forceHttps: true,
+    });
 
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -63,18 +85,27 @@ export async function GET(request: NextRequest) {
         megaStream.on('end', () => controller.close());
         megaStream.on('error', (error: Error) => controller.error(error));
       },
-      cancel() { megaStream.destroy(); },
+      cancel() {
+        megaStream.destroy();
+      },
     });
 
     const headers = new Headers({
       'Content-Type': contentType,
+      'Content-Disposition': `inline; filename="${fileName.replace(/["\\\r\n]/g, '_')}"`,
       'Accept-Ranges': 'bytes',
       'Content-Length': String(length),
       'Cache-Control': 'private, no-store',
     });
-    if (range) headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
 
-    return new Response(body, { status: range ? 206 : 200, headers });
+    if (range) {
+      headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
+    }
+
+    return new Response(body, {
+      status: range ? 206 : 200,
+      headers,
+    });
   } catch (error) {
     console.error('MEGA streaming error:', error);
     const message = error instanceof Error ? error.message : String(error);
