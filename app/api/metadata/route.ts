@@ -39,18 +39,14 @@ async function readAt(file: any, position: number, length: number): Promise<Buff
 function makeRemoteTokenizer(file: any, fileName: string): ITokenizer {
   const size = Number(file?.size || 0);
   const tokenizer: any = {
-    fileInfo: {
-      size,
-      path: fileName,
-      mimeType: 'application/octet-stream',
-    },
+    fileInfo: { size, path: fileName, mimeType: 'application/octet-stream' },
     position: 0,
     async readBuffer(target: Uint8Array, options: any = {}) {
       const position = Number.isFinite(options.position) ? Number(options.position) : tokenizer.position;
       const length = Number.isFinite(options.length) ? Number(options.length) : target.byteLength;
       const data = await readAt(file, position, length);
       target.set(data.subarray(0, target.byteLength));
-      if (!options.position) tokenizer.position = position + data.length;
+      if (options.position == null) tokenizer.position = position + data.length;
       return data.length;
     },
     async peekBuffer(target: Uint8Array, options: any = {}) {
@@ -71,9 +67,7 @@ function makeRemoteTokenizer(file: any, fileName: string): ITokenizer {
       if (data.length < token.len) throw new Error('Unexpected end of file');
       return token.get(data, 0);
     },
-    async readNumber(token: IGetToken<number>) {
-      return tokenizer.readToken(token);
-    },
+    async readNumber(token: IGetToken<number>) { return tokenizer.readToken(token); },
     async ignore(length: number) {
       if (length < 0) throw new Error('Negative ignore is not supported');
       tokenizer.position = Math.min(size, tokenizer.position + length);
@@ -85,8 +79,12 @@ function makeRemoteTokenizer(file: any, fileName: string): ITokenizer {
 }
 
 function normalizeList(value: unknown): string[] {
-  if (!Array.isArray(value)) return value ? [String(value)] : [];
+  if (!Array.isArray(value)) return value ? [String(value).trim()].filter(Boolean) : [];
   return value.map(String).map(v => v.trim()).filter(Boolean);
+}
+
+function unique(values: string[]): string[] {
+  return [...new Map(values.map(value => [value.toLocaleLowerCase(), value])).values()];
 }
 
 export async function GET(request: NextRequest) {
@@ -102,12 +100,26 @@ export async function GET(request: NextRequest) {
     const fileName = String(file.name || 'track');
     const extension = fileName.toLowerCase().split('.').pop() || '';
     const tokenizer = makeRemoteTokenizer(file, fileName);
-    const metadata = await parseFromTokenizer(tokenizer, { skipCovers: true, duration: false, skipPostHeaders: true });
+    const metadata = await parseFromTokenizer(tokenizer, {
+      skipCovers: true,
+      duration: false,
+      skipPostHeaders: true,
+    });
     const common: any = metadata?.common || {};
 
-    const artists = normalizeList(common.artists || common.artist);
-    const albumArtists = normalizeList(common.albumartists || common.albumartist);
-    const artist = String(common.artist || artists[0] || '').trim();
+    // This matches the Windows-style music fields:
+    // Contributing artists = System.Music.Artist / track artist(s)
+    // Album artist = System.Music.AlbumArtist / album artist
+    const contributingArtists = unique([
+      ...normalizeList(common.artists),
+      ...normalizeList(common.artist),
+    ]);
+    const albumArtists = unique([
+      ...normalizeList(common.albumartists),
+      ...normalizeList(common.albumartist),
+    ]);
+
+    const artist = String(common.artist || contributingArtists[0] || '').trim();
     const albumArtist = String(common.albumartist || albumArtists[0] || '').trim();
 
     return Response.json({
@@ -116,7 +128,8 @@ export async function GET(request: NextRequest) {
       title: String(common.title || '').trim(),
       album: String(common.album || '').trim(),
       artist,
-      artists,
+      contributingArtists,
+      artists: contributingArtists,
       albumArtist,
       albumArtists,
       genre: normalizeList(common.genre),
