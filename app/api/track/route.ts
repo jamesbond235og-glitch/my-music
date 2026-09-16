@@ -23,7 +23,7 @@ function getAudioContentType(fileName: string): string {
   }
 }
 
-async function findSong(path: string) {
+async function findSongByPath(path: string): Promise<any> {
   const parts = path.split('/').filter(Boolean);
   if (!parts.length) throw new Error('Missing song path');
 
@@ -42,7 +42,28 @@ async function findSong(path: string) {
   return current;
 }
 
+async function findSongById(id: string): Promise<any | null> {
+  const root = MEGAFile.fromURL(MEGA_FOLDER_URL);
+  await root.loadAttributes();
+
+  const walk = (folder: any): any | null => {
+    const children = Array.isArray(folder?.children) ? folder.children : [];
+    for (const child of children) {
+      const childId = String(child?.nodeId || child?.downloadId || '');
+      if (childId === id) return child;
+      if (child?.directory || Array.isArray(child?.children)) {
+        const found = walk(child);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
+  return walk(root);
+}
+
 export async function GET(request: NextRequest) {
+  const id = request.nextUrl.searchParams.get('id');
   const path = request.nextUrl.searchParams.get('path');
   const urlParam = request.nextUrl.searchParams.get('url');
   const legacyFormat = request.nextUrl.searchParams.get('format');
@@ -50,10 +71,11 @@ export async function GET(request: NextRequest) {
   try {
     let file: any;
 
-    if (path) {
-      // Shared-folder children are real File objects and can be downloaded
-      // directly, without rebuilding a fragile /file/<nodeId> URL.
-      file = await findSong(path);
+    if (id) {
+      file = await findSongById(id);
+      if (!file) throw new Error(`Song not found: ${id}`);
+    } else if (path) {
+      file = await findSongByPath(path);
     } else {
       const sourceUrl = urlParam || (legacyFormat === 'm4a' ? LEGACY_M4A_URL : MP3_URL);
       if (!sourceUrl) return new Response('MEGA song URL is not configured', { status: 400 });
