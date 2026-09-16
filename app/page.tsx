@@ -94,29 +94,22 @@ export default function Page(){
 
   useEffect(()=>{
     const a=audioRef.current;if(!a)return;
-    const onTime=()=>{if(current.id===1)setPosition(a.currentTime)};
-    const onMeta=()=>{if(current.id===1)setDuration(a.duration||0)};
-    const onError=()=>{if(current.id===1)setStreamError('MEGA stream could not be loaded. Check the MEGA file.')};
+    const onTime=()=>setPosition(a.currentTime);
+    const onMeta=()=>setDuration(a.duration||0);
+    const onError=()=>setStreamError('MP3 stream could not be loaded. Check the MEGA file.');
     a.addEventListener('timeupdate',onTime);a.addEventListener('loadedmetadata',onMeta);a.addEventListener('error',onError);
     return()=>{a.removeEventListener('timeupdate',onTime);a.removeEventListener('loadedmetadata',onMeta);a.removeEventListener('error',onError)}
-  },[current.id]);
+  },[]);
 
   useEffect(()=>{
-    const a=audioRef.current;if(!a)return;
     stopAlac();
     alacBufferRef.current=null;
     alacOffsetRef.current=0;
     setPosition(0);setDuration(0);setStreamError('');setLoading(false);
-    a.pause();
-    if(current.id===1){
-      a.src=current.stream;
-      a.load();
-      if(playing)a.play().catch(()=>setPlaying(false));
-    }else{
-      a.removeAttribute('src');
-      a.load();
-      if(playing)playAlac();
-    }
+    const a=audioRef.current;
+    if(a){a.pause();a.load();}
+    if(current.id===1&&playing&&a)a.play().catch(()=>setPlaying(false));
+    if(current.id===2&&playing)playAlac();
     return()=>stopAlac();
   },[current]);
 
@@ -157,4 +150,4 @@ export default function Page(){
 <div className="mb-12"><div className="mb-4 flex items-center justify-between"><h2 className="text-xl font-semibold">Your albums</h2><button className="text-sm text-zinc-500 hover:text-white">See all</button></div><div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">{albums.map(([name,artist,bg])=><button key={name} className="group text-left"><div style={{background:bg}} className="mb-3 aspect-square rounded-2xl p-5 shadow-2xl transition group-hover:scale-[1.02]"><div className="flex h-full items-end"><Disc3 className="opacity-30" size={42}/></div></div><div className="truncate font-medium">{name}</div><div className="truncate text-sm text-zinc-500">{artist}</div></button>)}</div></div>
 <div><div className="mb-4 flex items-center justify-between"><h2 className="text-xl font-semibold">Songs</h2><span className="text-sm text-zinc-500">{filtered.length} tracks</span></div><div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025]">{filtered.map((s,i)=><div key={s.id} onDoubleClick={()=>{setCurrent(s);setPlaying(true)}} className="group flex items-center gap-4 border-b border-white/5 px-4 py-3 last:border-0 hover:bg-white/5"><div className="grid w-6 place-items-center text-xs text-zinc-600">{i+1}</div><div style={{background:s.cover}} className="h-11 w-11 shrink-0 rounded-lg"/><div className="min-w-0 flex-1"><div className="truncate font-medium">{s.title}</div><div className="truncate text-sm text-zinc-500">{s.artist} · {s.album}</div></div><div className="hidden text-xs text-zinc-500 lg:block">{s.quality}</div><div className="text-sm text-zinc-600">{duration?new Date(duration*1000).toISOString().substring(14,19):s.duration}</div><button onClick={()=>{setCurrent(s);setPlaying(true)}} className="grid h-9 w-9 place-items-center rounded-full bg-white text-black opacity-0 transition group-hover:opacity-100"><Play size={15} fill="currentColor"/></button></div>)}</div></div></section></main>
 <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-white/10 bg-zinc-900/95 px-4 py-3 backdrop-blur-xl md:ml-64"><div className="mx-auto flex max-w-7xl items-center gap-4"><div style={{background:current.cover}} className="hidden h-12 w-12 shrink-0 rounded-lg sm:block"/><div className="min-w-0 w-44"><div className="truncate text-sm font-medium">{current.title}</div><div className="truncate text-xs text-zinc-500">{current.artist}</div></div><div className="flex flex-1 items-center justify-center gap-4"><button className="hidden text-zinc-500 hover:text-white sm:block"><Shuffle size={17}/></button><button><SkipBack size={19} fill="currentColor"/></button><button onClick={togglePlayback} disabled={loading} className="grid h-10 w-10 place-items-center rounded-full bg-white text-black">{loading?<span className="text-xs">…</span>:playing?<Pause size={18} fill="currentColor"/>:<Play size={18} fill="currentColor"/>}</button><button><SkipForward size={19} fill="currentColor"/></button><button className="hidden text-zinc-500 hover:text-white sm:block"><Repeat2 size={17}/></button></div><div className="hidden items-center gap-3 md:flex"><span className="text-[10px] text-zinc-500">{current.quality}</span><button onClick={()=>setLiked(!liked)} className={liked?'text-white':'text-zinc-500'}><Heart size={18} fill={liked?'currentColor':'none'}/></button><Volume2 size={18} className="text-zinc-500"/><MoreHorizontal size={19} className="text-zinc-500"/></div></div><div className="mx-auto mt-2 h-1 max-w-7xl overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-white" style={{width:`${duration?Math.min(100,(position/duration)*100):0}%`}}/></div></div>
-<audio ref={audioRef} preload="metadata" onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={()=>setPlaying(false)}/>{streamError&&<div className="fixed left-1/2 top-20 z-50 max-w-[90vw] -translate-x-1/2 rounded-xl border border-red-400/30 bg-red-950/90 px-4 py-3 text-sm text-red-200 shadow-2xl">{streamError}</div>}<div className="fixed bottom-20 left-0 right-0 flex justify-around border-t border-white/10 bg-zinc-950/95 p-2 md:hidden"><button className="p-2 text-zinc-400"><Home size={20}/></button><button className="p-2 text-zinc-400"><Search size={20}/></button><button className="p-2 text-zinc-400"><Library size={20}/></button><button className="p-2 text-zinc-400"><Heart size={20}/></button></div></div>}
+{current.id===1&&<audio ref={audioRef} src={current.stream} preload="metadata" onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={()=>setPlaying(false)}/>} {streamError&&<div className="fixed left-1/2 top-20 z-50 max-w-[90vw] -translate-x-1/2 rounded-xl border border-red-400/30 bg-red-950/90 px-4 py-3 text-sm text-red-200 shadow-2xl">{streamError}</div>}<div className="fixed bottom-20 left-0 right-0 flex justify-around border-t border-white/10 bg-zinc-950/95 p-2 md:hidden"><button className="p-2 text-zinc-400"><Home size={20}/></button><button className="p-2 text-zinc-400"><Search size={20}/></button><button className="p-2 text-zinc-400"><Library size={20}/></button><button className="p-2 text-zinc-400"><Heart size={20}/></button></div></div>}
