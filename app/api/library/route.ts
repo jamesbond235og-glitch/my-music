@@ -77,9 +77,6 @@ async function walkFolder(folder: any, pathParts: string[], songs: Omit<LibraryS
 
 export async function GET() {
   try {
-    // Load the shared folder once. Its children are individual MEGA File
-    // objects; each child has its own nodeId that can be addressed through
-    // the documented /folder/.../file/... shared-link form.
     const folderLink = MEGAFile.fromURL(MEGA_FOLDER_URL);
     const loaded = await folderLink.loadAttributes();
     const root = loaded || folderLink;
